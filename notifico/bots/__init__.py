@@ -3,13 +3,13 @@ import json
 
 import redis
 import gevent
-from utopia import Network
 from raven.handlers.logging import SentryHandler
 from raven.conf import setup_logging
 
-from notifico.bots.manager import BotManager, Channel
+from notifico.bots.util import Network, Channel
+from notifico.bots.manager import BotManager
 from notifico.bots.bot import BotificoBot
-import notifico.default_config as config
+import notifico.config as config
 
 
 def start_manager():

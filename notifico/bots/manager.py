@@ -1,12 +1,20 @@
 # -*- coding: utf8 -*-
 __all__ = ('BotManager',)
+import random
 import logging
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 
-from utopia import Account
+from utopia import signals
+from utopia.client import Identity
+from utopia.plugins.handshake import HandshakePlugin
+from utopia.plugins.protocol import EasyProtocolPlugin
+from utopia.plugins.util import LogPlugin
+
+from notifico.bots.util import Network
+from notifico.bots.plugins import NickInUsePlugin, CTCPPlugin
+
 
 logger = logging.getLogger(__name__)
-Channel = namedtuple('Channel', ['channel', 'password'])
 
 
 class BotManager(object):
@@ -21,7 +29,12 @@ class BotManager(object):
         # A stack of released nicknames to keep our nicknames
         # unique across all networks.
         self._nick_stack = []
-        self._max_nick = 0
+
+        self._ctcp_responses = {
+            'PING': CTCPPlugin.ctcp_ping,
+            'TIME': CTCPPlugin.ctcp_time,
+            'VERSION': 'Notifico! - https://github.com/notifico/notifico'
+        }
 
     @property
     def active_bots(self):
@@ -76,13 +89,24 @@ class BotManager(object):
         """
         nickname = self.free_nick()
         bot = self._bot_class(
-            self,
-            Account.new(
-                nickname=nickname,
-                username=u"notifico",
-                realname=u"Notifico! - http://n.tkte.ch/"
+            Identity(
+                nickname,
+                user=u"notifico",
+                real=u"Notifico! - https://n.tkte.ch/",
+                password=network.password
             ),
-            network
+            network.host,
+            port=network.port,
+            ssl=network.ssl,
+            plugins=[
+                EasyProtocolPlugin(),
+                HandshakePlugin(),
+                NickInUsePlugin(self.free_nick),
+                CTCPPlugin(self._ctcp_responses),
+                LogPlugin(logger=logging.getLogger(
+                    '({0}:{1}:{2})'.format(*network)
+                ))
+            ]
         )
         try:
             bot.connect()
@@ -101,28 +125,44 @@ class BotManager(object):
             )
             return None
 
+        signals.on_disconnect.connect(self.remove_bot, sender=bot)
         self._active_bots[network._replace(ssl=False)].add(bot)
         return bot
 
-    def free_nick(self):
+    def free_nick(self, suffix_length=4):
         """
-        Return a free nickname to try.
-        """
-        if self._nick_stack:
-            # A previously used nick that has been free'd is available.
-            return self._nick_stack.pop()
+        Returns a randomly generated nickname to use for client
+        registration. Keeps track of which nicks are already in use globally.
 
-        self._max_nick += 1
-        return 'Not-{0:03}'.format(self._max_nick)
+        :param suffix_length: The maximum length for the randomly generated
+                              nickname suffix.
+        """
+        # Keep trying until we get a nickname that's not already in use.
+        while True:
+            new_nick = 'Not-{random_suffix:x}'.format(
+                # By far the fastest pure-python method for a short hex
+                # identifier.
+                random_suffix=random.randrange(
+                    16**suffix_length
+                )
+            )
+
+            if new_nick not in self._nick_stack:
+                break
+
+        self._nick_stack.append(new_nick)
+        return new_nick
 
     def give_up_nick(self, nickname):
         """
         A retiring bot is giving its nick up.
         """
-        self._nick_stack.append(nickname)
+        self._nick_stack.remove(nickname)
 
     def remove_bot(self, client):
-        network = client.network._replace(ssl=False)
+        signals.on_disconnect.disconnect(self.remove_bot, sender=client)
+
+        network = Network.from_client(client)._replace(ssl=False)
 
         if network not in self._active_bots:
             logger.debug(

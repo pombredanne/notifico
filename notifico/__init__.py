@@ -57,7 +57,7 @@ def create_instance():
     import os
 
     app = Flask(__name__)
-    app.config.from_object('notifico.default_config')
+    app.config.from_object('notifico.config')
 
     if app.config.get('NOTIFICO_ROUTE_STATIC'):
         # We should handle routing for static assets ourself (handy for
@@ -116,7 +116,7 @@ def create_instance():
     # Register our custom error handlers.
     from notifico.views import errors
 
-    app.error_handler_spec[None][500] = errors.error_500
+    app.register_error_handler(500, errors.error_500)
 
     # cia.vc XML-RPC kludge.
     from notifico.services.hooks.cia import handler
